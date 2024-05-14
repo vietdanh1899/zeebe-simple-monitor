@@ -5,6 +5,49 @@ networks:
     driver: bridge
 
 services:
+  graphql-engine:
+    image: hasura/graphql-engine:v2.38.0-ce
+    ports:
+      - "8080:8080"
+    restart: always
+    networks:
+      - zeebe_network
+    environment:
+      ## postgres database to store Hasura metadata
+      HASURA_GRAPHQL_METADATA_DATABASE_URL: postgres://postgres:zeebe@postgres-zeebe-simple-monitor:5432/zeeqs
+      ## this env var can be used to add the above postgres database to Hasura as a data source. this can be removed/updated based on your needs
+      PG_DATABASE_URL: postgres://postgres:zeebe@postgres-zeebe-simple-monitor:5432/zeeqs
+      ## enable the console served by server
+      HASURA_GRAPHQL_ENABLE_CONSOLE: "true" # set to "false" to disable console
+      ## enable debugging mode. It is recommended to disable this in production
+      HASURA_GRAPHQL_DEV_MODE: "true"
+      HASURA_GRAPHQL_ENABLED_LOG_TYPES: startup, http-log, webhook-log, websocket-log, query-log
+      ## uncomment next line to run console offline (i.e load console assets from server instead of CDN)
+      # HASURA_GRAPHQL_CONSOLE_ASSETS_DIR: /srv/console-assets
+      ## uncomment next line to set an admin secret
+      # HASURA_GRAPHQL_ADMIN_SECRET: myadminsecretkey
+      HASURA_GRAPHQL_METADATA_DEFAULTS: '{"backend_configs":{"dataconnector":{"athena":{"uri":"http://data-connector-agent:8081/api/v1/athena"},"mariadb":{"uri":"http://data-connector-agent:8081/api/v1/mariadb"},"mysql8":{"uri":"http://data-connector-agent:8081/api/v1/mysql"},"oracle":{"uri":"http://data-connector-agent:8081/api/v1/oracle"},"snowflake":{"uri":"http://data-connector-agent:8081/api/v1/snowflake"}}}}'
+    depends_on:
+      data-connector-agent:
+        condition: service_healthy
+  
+  data-connector-agent:
+    image: hasura/graphql-data-connector:v2.38.0
+    restart: always
+    ports:
+      - 8081:8081
+    environment:
+      QUARKUS_LOG_LEVEL: ERROR # FATAL, ERROR, WARN, INFO, DEBUG, TRACE
+      ## https://quarkus.io/guides/opentelemetry#configuration-reference
+      QUARKUS_OPENTELEMETRY_ENABLED: "false"
+      ## QUARKUS_OPENTELEMETRY_TRACER_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/api/v1/athena/health"]
+      interval: 5s
+      timeout: 10s
+      retries: 5
+      start_period: 5s
+
   zeebe:
     container_name: zeebe-broker-hazelcast
     image: ghcr.io/camunda-community-hub/zeebe-with-hazelcast-exporter:8.2.0
@@ -45,7 +88,7 @@ services:
 
   zeebe-redis:
     container_name: zeebe-broker-redis
-    image: ghcr.io/camunda-community-hub/zeebe-with-redis-exporter:8.4.2
+    image: ghcr.io/camunda-community-hub/zeebe-with-redis-exporter:8.5.0
     hostname: zeebe
     environment:
       - ZEEBE_REDIS_REMOTE_ADDRESS=redis://redis:6379
@@ -101,21 +144,21 @@ services:
     profiles:
       - redis
 
-  simple-monitor-in-memory:
-    container_name: zeebe-simple-monitor-in-memory
-    image: ghcr.io/camunda-community-hub/zeebe-simple-monitor:2.5.2
-    environment:
-      - zeebe.client.broker.gateway-address=zeebe:26500
-      - zeebe.client.worker.hazelcast.connection=zeebe:5701
-      - zeebe.client.worker.hazelcast.clusterName=dev
-    ports:
-      - "8082:8082"
-    depends_on:
-      - zeebe
-    networks:
-      - zeebe_network
-    profiles:
-      - hazelcast_in_memory
+  # simple-monitor-in-memory:
+  #   container_name: zeebe-simple-monitor-in-memory
+  #   image: ghcr.io/camunda-community-hub/zeebe-simple-monitor:2.5.2
+  #   environment:
+  #     - zeebe.client.broker.gateway-address=zeebe:26500
+  #     - zeebe.client.worker.hazelcast.connection=zeebe:5701
+  #     - zeebe.client.worker.hazelcast.clusterName=dev
+  #   ports:
+  #     - "8082:8082"
+  #   depends_on:
+  #     - zeebe
+  #   networks:
+  #     - zeebe_network
+  #   profiles:
+  #     - hazelcast_in_memory
 
   simple-monitor-in-memory-kafka:
     container_name: zeebe-simple-monitor-in-memory-kafka
@@ -150,6 +193,28 @@ services:
     profiles:
       - redis_in_memory
 
+  simple-monitor-postgres-redis:
+    container_name: simple-monitor-postgres-redis
+    image: ghcr.io/camunda-community-hub/zeebe-simple-monitor:2.7.2
+    environment:
+      - zeebe.client.broker.gateway-address=zeebe:26500
+      - zeebe-importer=redis
+      - zeebe.client.worker.redis.connection=redis://redis:6379
+      - spring.datasource.url=jdbc:postgresql://postgres-zeebe-simple-monitor:5432/postgres
+      - spring.datasource.username=postgres
+      - spring.datasource.password=zeebe
+      - spring.datasource.driverClassName=org.postgresql.Driver
+      - spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.PostgreSQLDialect
+      - spring.jpa.database-platform=org.hibernate.dialect.PostgreSQLDialect
+    ports:
+      - "8082:8082"
+    depends_on:
+      - zeebe-redis
+    networks:
+      - zeebe_network
+    profiles:
+      - redis
+
   simple-monitor-postgres:
     container_name: zeebe-simple-monitor-postgres
     image: ghcr.io/camunda-community-hub/zeebe-simple-monitor:2.5.2
@@ -171,6 +236,27 @@ services:
       - zeebe_network
     profiles:
       - hazelcast_postgres
+
+#  zeebe-simple-tasklist-postgres:
+#    container_name: zeebe-simple-tasklist-postgres
+#    image: ghcr.io/camunda-community-hub/zeebe-simple-tasklist:latest
+#    environment:
+#      - zeebe.client.broker.gateway-address=zeebe:26500
+#      - zeebe.client.worker.hazelcast.connection=zeebe:5701
+#      - spring.datasource.url=jdbc:postgresql://postgres-zeebe-simple-monitor:5432/postgres
+#      - spring.datasource.username=postgres
+#      - spring.datasource.password=zeebe
+#      - spring.datasource.driverClassName=org.postgresql.Driver
+#      - spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.PostgreSQLDialect
+#    ports:
+#      - "8081:8081"
+#    depends_on:
+#      - zeebe
+#      - postgres-zeebe-simple-monitor
+#    networks:
+#      - zeebe_network
+#    profiles:
+#      - postgres
 
   postgres-zeebe-simple-monitor:
     image: postgres:16.1

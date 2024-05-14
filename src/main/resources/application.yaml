@@ -1,8 +1,5 @@
 zeebe:
   client:
-    broker.gatewayAddress: 127.0.0.1:26500
-    security.plaintext: true
-
     worker:
       hazelcast:
         connection: localhost:5701
@@ -94,3 +91,12 @@ white-label:
     title: Zeebe Simple Monitor
     css.path: css/custom.css
     js.path: js/custom.js
+
+camunda:
+  client:
+    mode: simple
+    zeebe:
+      enabled: true
+      gateway-url: http://localhost:26500
+      base-url: http://localhost:9600
+      prefer-rest-over-grpc: false
